@@ -9,6 +9,7 @@
 #include <sstream>
 #include <stddef.h>
 #include <iomanip>
+#include <fcntl.h>
 
 #include "debugger.hpp"
 #include "registers.hpp"
@@ -92,7 +93,7 @@ void debugger::handle_sigtrap(siginfo_t info) {
 		case SI_KERNEL: //if breakpoint hit one of these will be set
 		case TRAP_BRKPT:
 		{
-			set_pic(get_pc() - 1); //return program counter to where it should be
+			set_pc(get_pc() - 1); //return program counter to where it should be
 			std::cout << "Hit breakpoint at address 0x" << std::hex << get_pc() << std::endl;
 			auto line_entry = get_line_entry_from_pc(get_pc());
 			print_source(line_entry->file->path, line_entry->line);
@@ -163,7 +164,7 @@ void debugger::wait_for_signal() {
 		case SIGTRAP:
 			handle_sigtrap(siginfo);
 			break;
-		case: SIGSEGV //si_code is siginfo member that gives more information about signal sent to process
+		case SIGSEGV: //si_code is siginfo member that gives more information about signal sent to process
 			std::cout << "Segfault. Reason: " << siginfo.si_code << std::endl;
 			break;
 		default:
