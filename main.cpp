@@ -1,7 +1,6 @@
 #include "linenoise.h"
 
 #include <vector>
-
 #include <iostream>
 #include <sys/ptrace.h>
 #include <sys/wait.h>
@@ -9,6 +8,7 @@
 #include <fstream>
 #include <sstream>
 #include <stddef.h>
+#include <iomanip>
 
 #include "debugger.hpp"
 #include "registers.hpp"
@@ -50,15 +50,100 @@ void debugger::set_pc(uint64_t pc) { //wrapper for program counter setting
 
 //END HELPER FUNCTIONS
 
+dwarf::line_table::iterator debugger::get_line_entry_from_pc(uint64_t pc) {
+	for (auto &cu : m_dwarf.compilation_units()) { //loop through compilation units
+		if (die_pc_range(cu.root()).contains(pc)) { //get compilation unit that contains program counter
+			auto &lt = cu.get_line_table(); 
+			auto it = lt.find_address(pc); //ask line table to get relevant entry of program counter
+			if (it == lt.end()) {
+				throw std::out_of_range{"Cannot find line entry"};
+			}
+			else {
+				return it;
+			}
+		}
+	}
+	throw std::out_of_range{"Cannot find line entry"};
+}
+
+dwarf::die debugger::get_function_from_pc(uint64_t pc) { 
+	for (auto &cu : m_dwarf.compilation_units()) { //for each compile unit
+		if (die_pc_range(cu.root()).contains(pc)) { //if program counter between DW_AT_low_pc an DW_AT_high_pc
+			for (const auto& die : cu.root()) { //for each function in compile unit
+				if (die.tag == dwarf::DW_TAG::subprogram) { 
+					if (die_pc_range(die).contains(pc)) { //if program counter between DW_AT_low_pc and DW_AT_high_pc
+						return die; //return function information
+					}
+				}
+			}
+		}
+	}
+	throw std::out_of_range{"Cannot find function"};
+}
+
+siginfo_t debugger::get_signal_info() { //method to get information about last signal process was sent
+	siginfo_t info; //siginfo_t is an obejct with process info
+	ptrace(PTRACE_GETSIGINFO, m_pid, nullptr, &info);
+	return info;
+}
+
+void debugger::handle_sigtrap(siginfo_t info) {
+	switch (info.si_code) {
+		case SI_KERNEL: //if breakpoint hit one of these will be set
+		case TRAP_BRKPT:
+		{
+			set_pic(get_pc() - 1); //return program counter to where it should be
+			std::cout << "Hit breakpoint at address 0x" << std::hex << get_pc() << std::endl;
+			auto line_entry = get_line_entry_from_pc(get_pc());
+			print_source(line_entry->file->path, line_entry->line);
+			return;
+		}
+		//will be set if signal sent by single stepping
+		case TRAP_TRACE:
+			return;
+		default:
+			std::cout << "Unkown SIGTRAP code " << info.si_code << std::endl;
+			return;
+	}
+}
+
+void debugger::print_source(const std::string& file_name, unsigned line, unsigned n_lines_context) {
+	std::ifstream file {file_name};
+	
+	//Work out a window around the desired line
+	auto start_line = line <= n_lines_context ? 1 : line - n_lines_context;
+	auto end_line = line + n_lines_context + (line < n_lines_context ? n_lines_context - line : 0) + 1;
+	
+	
+	char c{};
+	auto current_line = 1u;
+	//skip lines until start_line
+	while (current_line != start_line && file.get(c)) {
+		if (c == '\n') {
+			++current_line;
+		}
+	}
+	
+	//output cursor if we're at current line
+	std::cout << (current_line == line ? "> " : " ");
+	
+	//write lines up until end_line
+	while (current_line <= end_line && file.get(c)) {
+		std::cout << c;
+		if (c == '\n') {
+			++current_line;
+			//output cursor if at current line
+			std::cout << (current_line == line ? "> " : " ");
+		}
+	}
+	//write newline and make sure that the stream is flushed properly
+	std::cout << std::endl;
+}
+
 void debugger::step_over_breakpoint() {
-	// -1 because execution will go past the breakpoint
-	auto possible_breakpoint_location = get_pc() - 1;
-	if (m_breakpoints.count(possible_breakpoint_location)) { //if value at location key non-zero (overflow prevention)
-		auto& bp = m_breakpoints[possible_breakpoint_location];
-		if (bp.is_enabled()) {
-			auto previous_instruction_address = possible_breakpoint_location;
-			set_pc(previous_instruction_address); //put execution back to before the breakpoint
-			
+	if (m_breakpoints.count(get_pc())) { //if value at location key non-zero (overflow prevention)
+		auto& bp = m_breakpoints[get_pc()];
+		if (bp.is_enabled()) {			
 			bp.disable();	//disable breakpoint
 			ptrace(PTRACE_SINGLESTEP, m_pid, nullptr, nullptr); //step over original instruction
 			wait_for_signal();
@@ -71,6 +156,19 @@ void debugger::wait_for_signal() {
 	int wait_status;
 	auto options = 0;
 	waitpid(m_pid, &wait_status, options);
+	
+	auto siginfo = get_signal_info();
+	
+	switch (siginfo.si_signo) { //si_signo is member of siginfo that details which signal was sent to process
+		case SIGTRAP:
+			handle_sigtrap(siginfo);
+			break;
+		case: SIGSEGV //si_code is siginfo member that gives more information about signal sent to process
+			std::cout << "Segfault. Reason: " << siginfo.si_code << std::endl;
+			break;
+		default:
+			std::cout << "Got signal " << strsignal(siginfo.si_signo) << std::endl;
+	}
 }
 
 void debugger::dump_registers() {
@@ -133,7 +231,7 @@ void debugger::handle_command(const std::string& line) {
 		}
 	}
 	else if (is_prefix(command, "memory")) {
-		std:string addr {args[2], 2}; //assume hex address
+		std::string addr {args[2], 2}; //assume hex address
 		if (is_prefix(args[1], "read")) {
 			std::cout << std::hex << read_memory(std::stol(addr, 0, 16)) << std::endl;
 		}
