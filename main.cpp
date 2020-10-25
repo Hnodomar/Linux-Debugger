@@ -50,29 +50,113 @@ void debugger::set_pc(uint64_t pc) {
 	set_register_value(m_pid, reg::rip, pc);
 }
 
-//END HELPER FUNCTIONS
-
-void debugger::step_over_breakpoint() { 
-	auto possible_breakpoint_location = get_pc() - 1;
-	if (m_breakpoints.count(possible_breakpoint_location)) { //check to see if there is breakpoint
-		auto& bp = m_breakpoints[possible_breakpoint_location];
-		if (bp.is_enabled()) { //if enabled
-			auto previous_instruction_address = possible_breakpoint_location;
-			set_pc(previous_instruction_address); //put execution back to before the breakpoint
-			
-			bp.disable(); //disable
-			ptrace(PTRACE_SINGLESTEP, m_pid, nullptr, nullptr); //step over breakpoint
-			wait_for_signal(); //wait for ptrace to step
-			bp.enable(); //re-enable
-		}
-	}
-}
-
 void debugger::dump_registers() {
 	for (const auto& rd : g_register_descriptors) {
 		std::cout << rd.name << " 0x" << std::setfill('0') << std::setw(16)
 			<< std::hex << get_register_value(m_pid, rd.r) << std::endl;
 	}
+}
+
+//END HELPER FUNCTIONS
+
+uint64_t debugger::get_relative_pc(uint64_t Abspc) {
+	std::string filepath = "/proc/";
+	filepath += std::to_string(m_pid);
+	filepath += "/maps";
+	
+	std::string load_address = "";
+	std::ifstream load_address_file (filepath);
+	std::getline(load_address_file, load_address, '-');
+	
+	int64_t loadTemp = std::stoul(load_address, nullptr, 16);
+
+	std::string temp = "";
+	std::stringstream ss;
+	ss << std::hex << Abspc - loadTemp;
+	ss >> temp;
+
+	std::cout << "relative pc: " << temp << std::endl;
+	return std::stoul(temp, nullptr, 16);
+}
+
+dwarf::line_table::iterator debugger::get_line_entry_from_pc(uint64_t pc) {
+	uint64_t relativepc = get_relative_pc(pc);
+    for (auto &cu : m_dwarf.compilation_units()) {
+        if (die_pc_range(cu.root()).contains(relativepc)) {
+            auto &lt = cu.get_line_table();
+            auto it = lt.find_address(relativepc);
+            if (it == lt.end()) {
+                throw std::out_of_range{"Cannot find line entry"};
+            }
+            else {
+                return it;
+            }
+        }
+    }
+	
+    throw std::out_of_range{"Cannot find line entry"};
+}
+
+dwarf::die debugger::get_function_from_pc(uint64_t pc) {
+	get_relative_pc(pc);
+    for (auto &cu : m_dwarf.compilation_units()) {
+        if (die_pc_range(cu.root()).contains(pc)) {
+            for (const auto& die : cu.root()) {
+                if (die.tag == dwarf::DW_TAG::subprogram) {
+                    if (die_pc_range(die).contains(pc)) {
+                        return die;
+                    }
+                }
+            }
+        }
+    }
+
+    throw std::out_of_range{"Cannot find function"};
+}
+
+void debugger::print_source(const std::string& file_name, unsigned line, unsigned n_lines_context) {
+    std::ifstream file {file_name};
+
+    //Work out a window around the desired line
+    auto start_line = line <= n_lines_context ? 1 : line - n_lines_context;
+    auto end_line = line + n_lines_context + (line < n_lines_context ? n_lines_context - line : 0) + 1;
+
+    char c{};
+    auto current_line = 1u;
+    //Skip lines up until start_line
+    while (current_line != start_line && file.get(c)) {
+        if (c == '\n') {
+            ++current_line;
+        }
+    }
+
+    //Output cursor if we're at the current line
+    std::cout << (current_line==line ? "> " : "  ");
+
+    //Write lines up until end_line
+    while (current_line <= end_line && file.get(c)) {
+        std::cout << c;
+        if (c == '\n') {
+            ++current_line;
+            //Output cursor if we're at the current line
+            std::cout << (current_line==line ? "> " : "  ");
+        }
+    }
+
+    //Write newline and make sure that the stream is flushed properly
+    std::cout << std::endl;
+}
+
+void debugger::step_over_breakpoint() {
+    if (m_breakpoints.count(get_pc())) {
+        auto& bp = m_breakpoints[get_pc()];
+        if (bp.is_enabled()) {
+            bp.disable();
+            ptrace(PTRACE_SINGLESTEP, m_pid, nullptr, nullptr);
+            wait_for_signal();
+            bp.enable();
+        }
+    }
 }
 
 void debugger::set_breakpoint_at_address(std::intptr_t addr) {
@@ -82,10 +166,50 @@ void debugger::set_breakpoint_at_address(std::intptr_t addr) {
 	m_breakpoints[addr] = bp;
 }
 
+void debugger::handle_sigtrap(siginfo_t info) {
+    switch (info.si_code) {
+    //one of these will be set if a breakpoint was hit
+    case SI_KERNEL:
+    case TRAP_BRKPT:
+    {
+        set_pc(get_pc()-1); //put the pc back where it should be
+        std::cout << "Hit breakpoint at address 0x" << std::hex << get_pc() << std::endl;
+        auto line_entry = get_line_entry_from_pc(get_pc()); //display source line of our breakpoint
+        print_source(line_entry->file->path, line_entry->line);
+        return;
+    }
+    //this will be set if the signal was sent by single stepping
+    case TRAP_TRACE:
+        return;
+    default:
+        std::cout << "Unknown SIGTRAP code " << info.si_code << std::endl;
+        return;
+    }
+}
+
 void debugger::wait_for_signal() {
 	int wait_status;
-	auto options = 0;
-	waitpid(m_pid, &wait_status, options);
+    auto options = 0;
+    waitpid(m_pid, &wait_status, options);
+	//when waiting for signal, when we get a signal, handle signal!
+    auto siginfo = get_signal_info();
+
+    switch (siginfo.si_signo) { //switch for different kinds of signals our child process gets sent
+    case SIGTRAP:
+        handle_sigtrap(siginfo);
+        break;
+    case SIGSEGV:
+        std::cout << "Yay, segfault. Reason: " << siginfo.si_code << std::endl;
+        break;
+    default:
+        std::cout << "Got signal " << strsignal(siginfo.si_signo) << std::endl;
+    }
+}
+
+siginfo_t debugger::get_signal_info() { //wait_for_signal helper
+    siginfo_t info;
+    ptrace(PTRACE_GETSIGINFO, m_pid, nullptr, &info); //signal information
+    return info;
 }
 
 void debugger::continue_execution() {
@@ -123,7 +247,8 @@ std::intptr_t debugger::offset_address(std::string& addr) {
 	int64_t loadTemp, instTemp;
 	instTemp = std::stoul(addr, nullptr, 16); // turn the address strings into int64_t type
 	loadTemp = std::stoul(load_address, nullptr, 16);
-	//std::cout << std::hex << loadTemp << " " << instTemp << " " << instTemp - loadTemp << std::endl;
+	std::cout << std::hex << loadTemp << " " << instTemp << " " << instTemp - loadTemp << std::endl;
+	std::cout << std::hex << 0x000005fa + loadTemp << std::endl;
 	
 	std::string temp = "";
 	std::stringstream ss;
@@ -135,6 +260,8 @@ std::intptr_t debugger::offset_address(std::string& addr) {
 	//std::cout << load_address << std::endl;
 	return instTemp;
 }
+
+
 
 void debugger::handle_command(const std::string& line) {
 	auto args = split(line, ' ');
