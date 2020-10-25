@@ -27,7 +27,11 @@ namespace minidbg {
 			void set_breakpoint_at_address(std::intptr_t addr);
 			void dump_registers();
 			void print_source(const std::string& file_name, unsigned line, unsigned n_lines_context=2);
-			
+			void single_step_instruction();
+			void single_step_instruction_with_breakpoint_check();
+			std::intptr_t offset_address(std::string& addr);
+			uint64_t undo_offset_address(uint64_t addr);
+			uint64_t offset_address(uint64_t);
 			
 		private:
 			void continue_execution();
