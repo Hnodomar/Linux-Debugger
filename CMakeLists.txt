@@ -7,7 +7,10 @@ include_directories(dependencies/libelfin dependencies/linenoise include)
 add_executable(minidbg main.cpp dependencies/linenoise/linenoise.c)
 
 add_executable(hello examples/hello.cpp)
-set_target_properties(hello PROPERTIES COMPILE_FLAGS "-g -O0 -fPIE")
+set_target_properties(hello PROPERTIES COMPILE_FLAGS "-g -O0")
+
+add_executable(unwinding examples/stack_unwinding.cpp)
+set_target_properties(unwinding PROPERTIES COMPILE_FLAGS "-g -O0")
 
 add_custom_target(
 	libelfin

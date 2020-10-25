@@ -57,8 +57,15 @@ void debugger::dump_registers() {
 	}
 }
 
-//END HELPER FUNCTIONS
+void debugger::remove_breakpoint(std::intptr_t addr) {
+	if (m_breakpoints.at(addr).is_enabled()) {
+		m_breakpoints.at(addr).disable();
+	}
+	m_breakpoints.erase(addr);
+}
 
+//END HELPER FUNCTIONS
+//DWARF SECTION START
 uint64_t debugger::get_relative_pc(uint64_t Abspc) {
 	std::string filepath = "/proc/";
 	filepath += std::to_string(m_pid);
@@ -83,6 +90,7 @@ dwarf::line_table::iterator debugger::get_line_entry_from_pc(uint64_t pc) {
 	uint64_t relativepc = get_relative_pc(pc);
     for (auto &cu : m_dwarf.compilation_units()) {
         if (die_pc_range(cu.root()).contains(relativepc)) {
+			std::cout << "here";
             auto &lt = cu.get_line_table();
             auto it = lt.find_address(relativepc);
             if (it == lt.end()) {
@@ -93,17 +101,17 @@ dwarf::line_table::iterator debugger::get_line_entry_from_pc(uint64_t pc) {
             }
         }
     }
-	
+	std::cout << "here" << std::endl;
     throw std::out_of_range{"Cannot find line entry"};
 }
 
 dwarf::die debugger::get_function_from_pc(uint64_t pc) {
-	get_relative_pc(pc);
+	uint64_t relativepc = get_relative_pc(pc);
     for (auto &cu : m_dwarf.compilation_units()) {
-        if (die_pc_range(cu.root()).contains(pc)) {
+        if (die_pc_range(cu.root()).contains(relativepc)) {
             for (const auto& die : cu.root()) {
                 if (die.tag == dwarf::DW_TAG::subprogram) {
-                    if (die_pc_range(die).contains(pc)) {
+                    if (die_pc_range(die).contains(relativepc)) {
                         return die;
                     }
                 }
@@ -112,6 +120,87 @@ dwarf::die debugger::get_function_from_pc(uint64_t pc) {
     }
 
     throw std::out_of_range{"Cannot find function"};
+}
+
+//DWARF SECTION END
+
+void debugger::step_over() { //set a breakpoint at the next source line
+	//one problem: it's not that simple..
+	//we could be in a loop, or a conditional construct
+	//so.. it's not that simple!
+	//SOLUTION: set a breakpoint at every line in the current function (not a great solution.. but still a solution)
+	auto func = get_function_from_pc(get_pc());
+	auto func_entry = offset_address(at_low_pc(func)); //come back to this - could be relative address
+	auto func_end = offset_address(at_high_pc(func)); //get low and high PC values for given function DIE
+	
+	auto line = get_line_entry_from_pc(func_entry);
+	auto start_line = get_line_entry_from_pc(get_pc());
+	
+	std::vector<std::intptr_t> to_delete{}; //must delete all breakpoints after we're done... store them here
+	
+	while (line->address < func_end) { //loop over line table entries until one is hit outside range of function
+		if (line->address != start_line->address && !m_breakpoints.count(line->address)) { 
+			set_breakpoint_at_address(line->address); //make sure each line is a line we're not currently on
+			to_delete.push_back(line->address);		  //and that there isn't already a breakpoint set there
+		}
+		++line;
+	}
+	
+	auto frame_pointer = get_register_value(m_pid, reg::rbp);
+	auto return_address = read_memory(frame_pointer+8);
+	if (!m_breakpoints.count(return_address)) { //if there isn't a breakpoint
+		set_breakpoint_at_address(return_address);
+		to_delete.push_back(return_address);
+	}
+	
+	continue_execution();
+	
+	for (auto addr : to_delete) {
+		remove_breakpoint(addr);
+	}
+}
+
+void debugger::step_in() {
+	auto line = get_line_entry_from_pc(get_pc())->line; //get the line of current instruction
+	
+	while (get_line_entry_from_pc(get_pc())->line == line) { //while the instructions refer to the same line we're
+		single_step_instruction_with_breakpoint_check();	 //on, just keep stepping through instructions
+	}														 //until we get to one on a different line
+	
+	auto line_entry = get_line_entry_from_pc(get_pc()); //the new line of instruction
+	print_source(line_entry->file->path, line_entry->line); //print the new line we're on
+}
+
+void debugger::step_out() {
+	auto frame_pointer = get_register_value(m_pid, reg::rbp);
+	auto return_address = read_memory(frame_pointer+8); //return address stored 8 bytes after the start of a stack frame
+	
+	bool should_remove_breakpoint = false;
+	if (!m_breakpoints.count(return_address)) { //if there's no breakpoint at the return address already
+		set_breakpoint_at_address(return_address); //set a breakpoint
+		should_remove_breakpoint = true;
+	}
+	
+	continue_execution();
+	
+	if (should_remove_breakpoint) {
+		remove_breakpoint(return_address);
+	}
+}
+
+void debugger::single_step_instruction() {
+	ptrace(PTRACE_SINGLESTEP, m_pid, nullptr, nullptr);
+	wait_for_signal();
+}
+
+void debugger::single_step_instruction_with_breakpoint_check() {
+	//firstly check as to whether or not we need to disable and re-enable a breakpoint
+	if (m_breakpoints.count(get_pc())) {
+		step_over_breakpoint(); //this function already includes a ptrace SINGLE_STEP call
+	}
+	else {
+		single_step_instruction();
+	}
 }
 
 void debugger::print_source(const std::string& file_name, unsigned line, unsigned n_lines_context) {
@@ -297,6 +386,20 @@ void debugger::handle_command(const std::string& line) {
 			std::string val {args[3], 2};
 			write_memory(std::stol(addr, 0, 16), std::stol(val, 0, 16));
 		}
+	}
+	else if (is_prefix(command, "stepi")) {
+		single_step_instruction_with_breakpoint_check();
+		auto line_entry = get_line_entry_from_pc(get_pc()); //want to print immediate source code each time we step
+		print_source(line_entry->file->path, line_entry->line);
+	}
+	else if (is_prefix(command, "step")) {
+		step_in();
+	}
+	else if (is_prefix(command, "next")) {
+		step_over();
+	}
+	else if (is_prefix(command, "finish")) {
+		step_out();
 	}
 	else {
 		std::cerr << "Unknown command\n";
