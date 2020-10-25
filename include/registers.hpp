@@ -6,7 +6,7 @@
 
 //Information to enable us to interact with registers
 namespace minidbg {
-	enum class reg { 
+	enum class reg { //refers to registers
 		rax, rbx, rcx, rdx,
 		rdi, rsi, rbp, rsp,
 		r8,  r9,  r10, r11,
@@ -58,7 +58,7 @@ namespace minidbg {
 
 	uint64_t get_register_value(pid_t pid, reg r) {
 		user_regs_struct regs;
-		ptrace(PTRACE_GETREGS, pid, nullptr, &regs);
+		ptrace(PTRACE_GETREGS, pid, nullptr, &regs); //fills regs struct with registers (looks like array above)
 		//find element of g_register_descriptors that matches reg r identifier
 		auto it = std::find_if(begin(g_register_descriptors), end(g_register_descriptors),
 			[r](auto&& rd) { return rd.r == r; }); //capture clause [] to use r variable, argument is reference to array
