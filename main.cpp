@@ -67,6 +67,8 @@ void debugger::remove_breakpoint(std::intptr_t addr) {
 //END HELPER FUNCTIONS
 //DWARF SECTION START
 uint64_t debugger::get_relative_pc(uint64_t Abspc) {
+	std::cout << "abs pc: " << std::hex << Abspc << std::endl;
+	
 	std::string filepath = "/proc/";
 	filepath += std::to_string(m_pid);
 	filepath += "/maps";
@@ -105,6 +107,24 @@ dwarf::line_table::iterator debugger::get_line_entry_from_pc(uint64_t pc) {
     throw std::out_of_range{"Cannot find line entry"};
 }
 
+dwarf::line_table::iterator debugger::get_line_entry_from_rel_pc(uint64_t pc) {
+    for (auto &cu : m_dwarf.compilation_units()) {
+        if (die_pc_range(cu.root()).contains(pc)) {
+			std::cout << "here";
+            auto &lt = cu.get_line_table();
+            auto it = lt.find_address(pc);
+            if (it == lt.end()) {
+                throw std::out_of_range{"Cannot find line entry"};
+            }
+            else {
+                return it;
+            }
+        }
+    }
+	std::cout << "here" << std::endl;
+    throw std::out_of_range{"Cannot find line entry"};
+}
+
 dwarf::die debugger::get_function_from_pc(uint64_t pc) {
 	uint64_t relativepc = get_relative_pc(pc);
     for (auto &cu : m_dwarf.compilation_units()) {
@@ -130,10 +150,11 @@ void debugger::step_over() { //set a breakpoint at the next source line
 	//so.. it's not that simple!
 	//SOLUTION: set a breakpoint at every line in the current function (not a great solution.. but still a solution)
 	auto func = get_function_from_pc(get_pc());
-	auto func_entry = offset_address(at_low_pc(func)); //come back to this - could be relative address
-	auto func_end = offset_address(at_high_pc(func)); //get low and high PC values for given function DIE
+	auto func_entry = at_low_pc(func); //come back to this - could be relative address
+	auto func_end = at_high_pc(func); //get low and high PC values for given function DIE
+	//std::cout << "func_entry: " << func_entry << " func_end: " << func_end << std::endl;
 	
-	auto line = get_line_entry_from_pc(func_entry);
+	auto line = get_line_entry_from_rel_pc(func_entry);
 	auto start_line = get_line_entry_from_pc(get_pc());
 	
 	std::vector<std::intptr_t> to_delete{}; //must delete all breakpoints after we're done... store them here
@@ -147,6 +168,7 @@ void debugger::step_over() { //set a breakpoint at the next source line
 	}
 	
 	auto frame_pointer = get_register_value(m_pid, reg::rbp);
+	
 	auto return_address = read_memory(frame_pointer+8);
 	if (!m_breakpoints.count(return_address)) { //if there isn't a breakpoint
 		set_breakpoint_at_address(return_address);
@@ -172,20 +194,20 @@ void debugger::step_in() {
 }
 
 void debugger::step_out() {
-	auto frame_pointer = get_register_value(m_pid, reg::rbp);
-	auto return_address = read_memory(frame_pointer+8); //return address stored 8 bytes after the start of a stack frame
-	
-	bool should_remove_breakpoint = false;
-	if (!m_breakpoints.count(return_address)) { //if there's no breakpoint at the return address already
-		set_breakpoint_at_address(return_address); //set a breakpoint
-		should_remove_breakpoint = true;
-	}
-	
-	continue_execution();
-	
-	if (should_remove_breakpoint) {
-		remove_breakpoint(return_address);
-	}
+    auto frame_pointer = get_register_value(m_pid, reg::rbp);
+    auto return_address = read_memory(frame_pointer+8);
+
+    bool should_remove_breakpoint = false;
+    if (!m_breakpoints.count(return_address)) {
+        set_breakpoint_at_address(return_address);
+        should_remove_breakpoint = true;
+    }
+
+    continue_execution();
+
+    if (should_remove_breakpoint) {
+        remove_breakpoint(return_address);
+    }
 }
 
 void debugger::single_step_instruction() {
@@ -336,8 +358,8 @@ std::intptr_t debugger::offset_address(std::string& addr) {
 	int64_t loadTemp, instTemp;
 	instTemp = std::stoul(addr, nullptr, 16); // turn the address strings into int64_t type
 	loadTemp = std::stoul(load_address, nullptr, 16);
-	std::cout << std::hex << loadTemp << " " << instTemp << " " << instTemp - loadTemp << std::endl;
-	std::cout << std::hex << 0x000005fa + loadTemp << std::endl;
+	//std::cout << std::hex << loadTemp << " " << instTemp << " " << instTemp - loadTemp << std::endl;
+	//std::cout << std::hex << 0x000005fa + loadTemp << std::endl;
 	
 	std::string temp = "";
 	std::stringstream ss;

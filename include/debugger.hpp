@@ -51,6 +51,7 @@ namespace minidbg {
 			
 			auto get_function_from_pc(uint64_t pc) -> dwarf::die;
 			auto get_line_entry_from_pc(uint64_t pc) -> dwarf::line_table::iterator;
+			auto get_line_entry_from_rel_pc(uint64_t pc) -> dwarf::line_table::iterator;
 			
 			auto read_memory(uint64_t address) -> uint64_t;
 			void write_memory(uint64_t adress, uint64_t value);
