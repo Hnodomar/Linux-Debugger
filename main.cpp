@@ -74,8 +74,6 @@ void debugger::remove_breakpoint(std::intptr_t addr) {
 //END HELPER FUNCTIONS
 //DWARF SECTION START
 uint64_t debugger::get_relative_pc(uint64_t Abspc) {
-	std::cout << "abs pc: " << std::hex << Abspc << std::endl;
-	
 	std::string filepath = "/proc/";
 	filepath += std::to_string(m_pid);
 	filepath += "/maps";
@@ -91,7 +89,6 @@ uint64_t debugger::get_relative_pc(uint64_t Abspc) {
 	ss << std::hex << Abspc - loadTemp;
 	ss >> temp;
 
-	std::cout << "relative pc: " << temp << std::endl;
 	return std::stoul(temp, nullptr, 16);
 }
 
@@ -129,14 +126,12 @@ dwarf::line_table::iterator debugger::get_line_entry_from_pc(uint64_t pc) {
             }
         }
     }
-	std::cout << "here" << std::endl;
     throw std::out_of_range{"Cannot find line entry"};
 }
 
 dwarf::line_table::iterator debugger::get_line_entry_from_rel_pc(uint64_t pc) {
     for (auto &cu : m_dwarf.compilation_units()) {
         if (die_pc_range(cu.root()).contains(pc)) {
-			std::cout << "here";
             auto &lt = cu.get_line_table();
             auto it = lt.find_address(pc);
             if (it == lt.end()) {
@@ -147,7 +142,6 @@ dwarf::line_table::iterator debugger::get_line_entry_from_rel_pc(uint64_t pc) {
             }
         }
     }
-	std::cout << "here" << std::endl;
     throw std::out_of_range{"Cannot find line entry"};
 }
 
@@ -219,7 +213,8 @@ void debugger::set_breakpoint_at_function(const std::string& name) {
 				auto low_pc = at_low_pc(die); //set breakpoint to start address of function
 				auto entry = get_line_entry_from_rel_pc(low_pc);
 				++entry; //get first line of user code instead of prologue
-				set_breakpoint_at_address(entry->address);
+				//std::cout << std::hex << get_abs_address(entry->address) << std::endl;
+				set_breakpoint_at_address(get_abs_address(entry->address));
 			}
 		}
 	}
@@ -470,7 +465,8 @@ void debugger::handle_command(const std::string& line) {
 		}
 		else if (args[1].find(':') != std::string::npos) {
 			auto file_and_line = split(args[1], ':');
-			set_breakpoint_at_source_line(file_and_line[0], std::stoi(file_and_line[1]));
+			//std::cout << file_and_line[0] << " " << file_and_line[1] << std::endl;
+			set_breakpoint_at_source_line(file_and_line[1], std::stoi(file_and_line[0]));
 		}
 		else {
 			set_breakpoint_at_function(args[1]);
