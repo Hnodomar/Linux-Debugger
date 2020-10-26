@@ -115,7 +115,6 @@ dwarf::line_table::iterator debugger::get_line_entry_from_pc(uint64_t pc) {
 	uint64_t relativepc = get_relative_pc(pc);
     for (auto &cu : m_dwarf.compilation_units()) {
         if (die_pc_range(cu.root()).contains(relativepc)) {
-			std::cout << "here";
             auto &lt = cu.get_line_table();
             auto it = lt.find_address(relativepc);
             if (it == lt.end()) {
@@ -176,19 +175,41 @@ symbol_type to_symbol_type(elf::stt sym) {
 };
 
 std::vector<symbol> debugger::lookup_symbol(const std::string& name) {
-	std::vector<symbol> syms;
-	for (auto &sec : m_elf.sections()) {
-		if (sec.get_hdr().type != elf::sht::symtab && sec.get_hdr().type != elf::sht::dynsym) {
-			continue;
-		}
-		for (auto sym : sec.as_symtab()) {
-			if (sym.get_name() == name) {
-				auto &d = sym.get_data();
-				syms.push_back(symbol{to_symbol_type(d.type()), sym.get_name(), d.value});
-			} //get all symbols and push them into syms vector
-		}
+    std::vector<symbol> syms;
+
+    for (auto &sec : m_elf.sections()) {
+        if (sec.get_hdr().type != elf::sht::symtab && sec.get_hdr().type != elf::sht::dynsym)
+            continue;
+
+        for (auto sym : sec.as_symtab()) {
+            if (sym.get_name() == name) {
+                auto &d = sym.get_data();
+                syms.push_back(symbol{to_symbol_type(d.type()), sym.get_name(), d.value});
+            }
+        }
+    }
+
+    return syms;
+}
+
+void debugger::print_backtrace() {
+	auto output_frame = [frame_number = 0] (auto&& func) mutable {
+		std::cout << "frame #" << frame_number++ << ": 0x" << dwarf::at_low_pc(func)
+			<< ' ' << dwarf::at_name(func) << std::endl;
+	};
+	
+	auto current_func = get_function_from_pc(get_pc()); //first frame will be one currently being executed
+	output_frame(current_func);							//so just look up PC in DWARF
+	
+	auto frame_pointer = get_register_value(m_pid, reg::rbp); //get frame pointer and return address
+	auto return_address = read_memory(frame_pointer+8);		  //for current function
+	
+	while (dwarf::at_name(current_func) != "main") { //unwind until we hit main
+		current_func = get_function_from_pc(return_address);
+		output_frame(current_func);
+		frame_pointer = read_memory(frame_pointer);
+		return_address = read_memory(frame_pointer+8);
 	}
-	return syms;
 }
 
 void debugger::set_breakpoint_at_source_line(const std::string& file, unsigned line) {
@@ -514,6 +535,9 @@ void debugger::handle_command(const std::string& line) {
 		for (auto&& s : syms) {
 			std::cout << s.name << ' ' << to_string(s.type) << " 0x" << std::hex << s.addr << std::endl;
 		}
+	}
+	else if (is_prefix(command, "backtrace")) {
+		print_backtrace();
 	}
 	else {
 		std::cerr << "Unknown command\n";
