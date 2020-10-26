@@ -18,6 +18,7 @@
 
 using namespace minidbg;
 
+//START HELPER FUNCTIONS
 std::vector<std::string> split(const std::string &s, char delimiter) {
 	std::vector<std::string> out{};
 	std::stringstream ss {s};
@@ -32,6 +33,12 @@ std::vector<std::string> split(const std::string &s, char delimiter) {
 bool is_prefix(const std::string& s, const std::string& of) {
 	if (s.size() > of.size()) return false;
 	return std::equal(s.begin(), s.end(), of.begin());
+}
+
+bool is_suffix(const std::string& s, const std::string& of) {
+    if (s.size() > of.size()) return false;
+    auto diff = of.size() - s.size();
+    return std::equal(s.begin(), s.end(), of.begin() + diff);
 }
 
 uint64_t debugger::read_memory(uint64_t address) {
@@ -85,6 +92,25 @@ uint64_t debugger::get_relative_pc(uint64_t Abspc) {
 	ss >> temp;
 
 	std::cout << "relative pc: " << temp << std::endl;
+	return std::stoul(temp, nullptr, 16);
+}
+
+uint64_t debugger::get_abs_address(uint64_t addr) {
+	std::string filepath = "/proc/";
+	filepath += std::to_string(m_pid);
+	filepath += "/maps";
+	
+	std::string load_address = "";
+	std::ifstream load_address_file (filepath);
+	std::getline(load_address_file, load_address, '-');
+	
+	int64_t loadTemp = std::stoul(load_address, nullptr, 16);
+
+	std::string temp = "";
+	std::stringstream ss;
+	ss << std::hex << addr + loadTemp;
+	ss >> temp;
+	
 	return std::stoul(temp, nullptr, 16);
 }
 
@@ -143,6 +169,61 @@ dwarf::die debugger::get_function_from_pc(uint64_t pc) {
 }
 
 //DWARF SECTION END
+
+symbol_type to_symbol_type(elf::stt sym) {
+	switch (sym) { //need to map between symbol type returned by libelfin and enum class
+		case elf::stt::notype: return symbol_type::notype;
+		case elf::stt::object: return symbol_type::object;
+		case elf::stt::func: return symbol_type::func;
+		case elf::stt::section: return symbol_type::section;
+		case elf::stt::file: return symbol_type::file;
+		default: return symbol_type::notype;
+	}
+};
+
+std::vector<symbol> debugger::lookup_symbol(const std::string& name) {
+	std::vector<symbol> syms;
+	for (auto &sec : m_elf.sections()) {
+		if (sec.get_hdr().type != elf::sht::symtab && sec.get_hdr().type != elf::sht::dynsym) {
+			continue;
+		}
+		for (auto sym : sec.as_symtab()) {
+			if (sym.get_name() == name) {
+				auto &d = sym.get_data();
+				syms.push_back(symbol{to_symbol_type(d.type()), sym.get_name(), d.value});
+			} //get all symbols and push them into syms vector
+		}
+	}
+	return syms;
+}
+
+void debugger::set_breakpoint_at_source_line(const std::string& file, unsigned line) {
+	for (const auto& cu : m_dwarf.compilation_units()) {
+		if (is_suffix(file, at_name(cu.root()))) { //get compilation unit whose name corresponds to given file
+			const auto& lt = cu.get_line_table();
+			for (const auto& entry : lt) { 
+				if (entry.is_stmt && entry.line == line) { //look for line corresponding to the desired line
+					auto addr = get_abs_address(entry.address);
+					set_breakpoint_at_address(addr); //set breakpoint at line address
+					return;
+				}
+			}
+		}
+	}
+}
+
+void debugger::set_breakpoint_at_function(const std::string& name) {
+	for (const auto& cu : m_dwarf.compilation_units()) { //loop through compilation units
+		for (const auto& die : cu.root()) {
+			if (die.has(dwarf::DW_AT::name) && at_name(die) == name) { //match against DW_AT_NAME
+				auto low_pc = at_low_pc(die); //set breakpoint to start address of function
+				auto entry = get_line_entry_from_rel_pc(low_pc);
+				++entry; //get first line of user code instead of prologue
+				set_breakpoint_at_address(entry->address);
+			}
+		}
+	}
+}
 
 void debugger::step_over() { //set a breakpoint at the next source line
 	//one problem: it's not that simple..
@@ -382,9 +463,18 @@ void debugger::handle_command(const std::string& line) {
 		continue_execution();
 	}
 	else if (is_prefix(command, "break")) {
-		std::string addr{args[1]};
-		std::intptr_t correct_address = offset_address(addr);
-		set_breakpoint_at_address(correct_address);
+		if (args[1][0] == '0' && args[1][1] == 'x') {
+			std::string addr{args[1]};
+			std::intptr_t correct_address = offset_address(addr);
+			set_breakpoint_at_address(correct_address);
+		}
+		else if (args[1].find(':') != std::string::npos) {
+			auto file_and_line = split(args[1], ':');
+			set_breakpoint_at_source_line(file_and_line[0], std::stoi(file_and_line[1]));
+		}
+		else {
+			set_breakpoint_at_function(args[1]);
+		}
 	}
 	else if (is_prefix(command, "register")) {
 		if (is_prefix(args[1], "dump")) {
@@ -422,6 +512,12 @@ void debugger::handle_command(const std::string& line) {
 	}
 	else if (is_prefix(command, "finish")) {
 		step_out();
+	}
+	else if (is_prefix(command, "symbol")) {
+		auto syms = lookup_symbol(args[1]);
+		for (auto&& s : syms) {
+			std::cout << s.name << ' ' << to_string(s.type) << " 0x" << std::hex << s.addr << std::endl;
+		}
 	}
 	else {
 		std::cerr << "Unknown command\n";
