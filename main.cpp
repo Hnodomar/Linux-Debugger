@@ -289,7 +289,6 @@ void debugger::set_breakpoint_at_function(const std::string& name) {
 				auto low_pc = at_low_pc(die); //set breakpoint to start address of function
 				auto entry = get_line_entry_from_rel_pc(low_pc);
 				++entry; //get first line of user code instead of prologue
-				//std::cout << std::hex << get_abs_address(entry->address) << std::endl;
 				set_breakpoint_at_address(get_abs_address(entry->address));
 			}
 		}
@@ -304,7 +303,6 @@ void debugger::step_over() { //set a breakpoint at the next source line
 	auto func = get_function_from_pc(get_pc());
 	auto func_entry = at_low_pc(func); //come back to this - could be relative address
 	auto func_end = at_high_pc(func); //get low and high PC values for given function DIE
-	//std::cout << "func_entry: " << func_entry << " func_end: " << func_end << std::endl;
 	
 	auto line = get_line_entry_from_rel_pc(func_entry);
 	auto start_line = get_line_entry_from_pc(get_pc());
@@ -496,9 +494,7 @@ void debugger::run() {
     }
 }
 
-std::intptr_t debugger::offset_address(std::string& addr) {
-	//std::cout << m_pid << std::endl;
-	
+std::intptr_t debugger::offset_address(std::string& addr) {	
 	std::string filepath = "/proc/";
 	filepath += std::to_string(m_pid);
 	filepath += "/maps";
@@ -510,17 +506,13 @@ std::intptr_t debugger::offset_address(std::string& addr) {
 	int64_t loadTemp, instTemp;
 	instTemp = std::stoul(addr, nullptr, 16); // turn the address strings into int64_t type
 	loadTemp = std::stoul(load_address, nullptr, 16);
-	//std::cout << std::hex << loadTemp << " " << instTemp << " " << instTemp - loadTemp << std::endl;
-	//std::cout << std::hex << 0x000005fa + loadTemp << std::endl;
 	
 	std::string temp = "";
 	std::stringstream ss;
 	ss << std::hex << instTemp + loadTemp;
 	ss >> temp;
 	instTemp = std::stoul(temp, nullptr, 16);
-	//std::cout << instTemp << std::endl;
 	
-	//std::cout << load_address << std::endl;
 	return instTemp;
 }
 
@@ -541,7 +533,6 @@ void debugger::handle_command(const std::string& line) {
 		}
 		else if (args[1].find(':') != std::string::npos) {
 			auto file_and_line = split(args[1], ':');
-			//std::cout << file_and_line[0] << " " << file_and_line[1] << std::endl;
 			set_breakpoint_at_source_line(file_and_line[1], std::stoi(file_and_line[0]));
 		}
 		else {
@@ -611,11 +602,11 @@ int main(int argc, char* argv[]) {
         return -1;
     }
     auto prog = argv[1];
-    auto pid = fork(); //Create new process (called a child process)
+    auto pid = fork(); //Create new process 
     if (pid == 0) { //fork returns 0 to newly created child process
     //child goes here - execute debugee
         ptrace(PTRACE_TRACEME, 0, nullptr, nullptr); //allow parent to trace child
-        execl(prog, prog, nullptr); //analogous: ./prog prog i.e: ./fullPath processName
+        execl(prog, prog, nullptr);
     }
     else if (pid >= 1) { //positive value returned by fork will be child process ID
     //parent goes here - execute debugger

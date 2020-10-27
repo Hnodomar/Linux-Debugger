@@ -6,13 +6,13 @@ add_compile_options(-std=c++14)
 include_directories(dependencies/libelfin dependencies/linenoise include)
 add_executable(minidbg main.cpp dependencies/linenoise/linenoise.c)
 
-add_executable(hello examples/hello.cpp)
+add_executable(hello tests/hello.cpp)
 set_target_properties(hello PROPERTIES COMPILE_FLAGS "-g")
 
-add_executable(unwinding examples/stack_unwinding.cpp)
+add_executable(unwinding tests/stack_unwinding.cpp)
 set_target_properties(unwinding PROPERTIES COMPILE_FLAGS "-g")
 
-add_executable(backtrace examples/backtrace.cpp)
+add_executable(backtrace tests/backtrace.cpp)
 set_target_properties(backtrace PROPERTIES COMPILE_FLAGS "-g")
 
 add_custom_target(
