@@ -1,22 +1,17 @@
-#include "linenoise.h"
-
-#include <string>
-
-#include <vector>
-#include <iostream>
-#include <sys/ptrace.h>
-#include <sys/wait.h>
-#include <unistd.h>
-#include <fstream>
-#include <sstream>
-#include <stddef.h>
-#include <iomanip>
-#include <fcntl.h>
-
 #include "debugger.hpp"
 #include "registers.hpp"
 
-using namespace minidbg;
+namespace minidbg {
+
+std::string to_string (symbol_type st) {
+    switch (st) {
+        case symbol_type::notype: return "notype";
+        case symbol_type::object: return "object";
+        case symbol_type::func: return "func";
+        case symbol_type::section: return "section";
+        case symbol_type::file: return "file";
+    }
+}
 
 class ptrace_expr_context : public dwarf::expr_context {
 public:
@@ -26,7 +21,7 @@ public:
         return get_register_value_from_dwarf_register(m_pid, regnum);
     }
 
-    dwarf::taddr pc() override {
+    dwarf::taddr pc() {
         struct user_regs_struct regs;
         ptrace(PTRACE_GETREGS, m_pid, nullptr, &regs);
         return regs.rip;
@@ -39,6 +34,37 @@ public:
 
 private:
     pid_t m_pid;
+};
+
+std::vector<std::string> split(const std::string &s, char delimiter) {
+	std::vector<std::string> out{};
+	std::stringstream ss {s};
+	std::string item;	
+	while (std::getline(ss, item, delimiter))
+			out.push_back(item);
+	return out;
+}
+
+bool is_prefix(const std::string& s, const std::string& of) {
+	if (s.size() > of.size()) return false;
+	return std::equal(s.begin(), s.end(), of.begin());
+}
+
+bool is_suffix(const std::string& s, const std::string& of) {
+    if (s.size() > of.size()) return false;
+    auto diff = of.size() - s.size();
+    return std::equal(s.begin(), s.end(), of.begin() + diff);
+}
+
+symbol_type to_symbol_type(elf::stt sym) {
+	switch (sym) { //need to map between symbol type returned by libelfin and enum class
+		case elf::stt::notype: return symbol_type::notype;
+		case elf::stt::object: return symbol_type::object;
+		case elf::stt::func: return symbol_type::func;
+		case elf::stt::section: return symbol_type::section;
+		case elf::stt::file: return symbol_type::file;
+		default: return symbol_type::notype;
+	}
 };
 
 void debugger::read_variables() {
@@ -72,29 +98,6 @@ void debugger::read_variables() {
     }
 }
 
-//START HELPER FUNCTIONS
-std::vector<std::string> split(const std::string &s, char delimiter) {
-	std::vector<std::string> out{};
-	std::stringstream ss {s};
-	std::string item;
-	
-	while (std::getline(ss, item, delimiter))
-			out.push_back(item);
-	
-	return out;
-}
-
-bool is_prefix(const std::string& s, const std::string& of) {
-	if (s.size() > of.size()) return false;
-	return std::equal(s.begin(), s.end(), of.begin());
-}
-
-bool is_suffix(const std::string& s, const std::string& of) {
-    if (s.size() > of.size()) return false;
-    auto diff = of.size() - s.size();
-    return std::equal(s.begin(), s.end(), of.begin() + diff);
-}
-
 uint64_t debugger::read_memory(uint64_t address) {
 	return ptrace(PTRACE_PEEKDATA, m_pid, address, nullptr);
 }
@@ -125,8 +128,6 @@ void debugger::remove_breakpoint(std::intptr_t addr) {
 	m_breakpoints.erase(addr);
 }
 
-//END HELPER FUNCTIONS
-//DWARF SECTION START
 uint64_t debugger::get_relative_pc(uint64_t Abspc) {
 	std::string filepath = "/proc/";
 	filepath += std::to_string(m_pid);
@@ -215,19 +216,6 @@ dwarf::die debugger::get_function_from_pc(uint64_t pc) {
 
     throw std::out_of_range{"Cannot find function"};
 }
-
-//DWARF SECTION END
-
-symbol_type to_symbol_type(elf::stt sym) {
-	switch (sym) { //need to map between symbol type returned by libelfin and enum class
-		case elf::stt::notype: return symbol_type::notype;
-		case elf::stt::object: return symbol_type::object;
-		case elf::stt::func: return symbol_type::func;
-		case elf::stt::section: return symbol_type::section;
-		case elf::stt::file: return symbol_type::file;
-		default: return symbol_type::notype;
-	}
-};
 
 std::vector<symbol> debugger::lookup_symbol(const std::string& name) {
     std::vector<symbol> syms;
@@ -516,8 +504,6 @@ std::intptr_t debugger::offset_address(std::string& addr) {
 	return instTemp;
 }
 
-
-
 void debugger::handle_command(const std::string& line) {
 	auto args = split(line, ' ');
 	auto command = args[0];
@@ -593,24 +579,4 @@ void debugger::handle_command(const std::string& line) {
 	}
 }
 
-
-// fork/exec pattern
-
-int main(int argc, char* argv[]) {
-    if (argc < 2) {
-        std::cerr << "Program to debug not specified";
-        return -1;
-    }
-    auto prog = argv[1];
-    auto pid = fork(); //Create new process 
-    if (pid == 0) { //fork returns 0 to newly created child process
-    //child goes here - execute debugee
-        ptrace(PTRACE_TRACEME, 0, nullptr, nullptr); //allow parent to trace child
-        execl(prog, prog, nullptr);
-    }
-    else if (pid >= 1) { //positive value returned by fork will be child process ID
-    //parent goes here - execute debugger
-        debugger dbg{prog, pid};
-        dbg.run();
-    }
 }

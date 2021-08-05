@@ -3,8 +3,10 @@ project (Debugger)
 
 add_compile_options(-std=c++14)
 
+file(GLOB SOURCES "src/*.cpp")
+
 include_directories(dependencies/libelfin dependencies/linenoise include)
-add_executable(minidbg main.cpp dependencies/linenoise/linenoise.c)
+add_executable(minidbg ${SOURCES} dependencies/linenoise/linenoise.c)
 
 add_executable(hello tests/hello.cpp)
 set_target_properties(hello PROPERTIES COMPILE_FLAGS "-g")

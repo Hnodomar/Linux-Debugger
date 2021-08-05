@@ -5,8 +5,18 @@
 #include <string>
 #include <linux/types.h>
 #include <unordered_map>
+#include <iostream>
+#include <fstream>
+#include <sstream>
+#include <sys/ptrace.h>
+#include <sys/wait.h>
+#include <unistd.h>
+#include <stddef.h>
+#include <iomanip>
+#include <fcntl.h>
 
 #include "breakpoint.hpp"
+#include "linenoise.h"
 #include "dwarf/dwarf++.hh"
 #include "elf/elf++.hh"
 
@@ -18,16 +28,6 @@ namespace minidbg {
 		section,		//section
 		file,			//source file thats associated with object file
 	};
-
-	std::string to_string (symbol_type st) {
-		switch (st) {
-			case symbol_type::notype: return "notype";
-			case symbol_type::object: return "object";
-			case symbol_type::func: return "func";
-			case symbol_type::section: return "section";
-			case symbol_type::file: return "file";
-		}
-	}
 
 	struct symbol {
 		symbol_type type; //enum
